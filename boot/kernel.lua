@@ -92,11 +92,13 @@ _G.processes = {}
 _G.processes.__index = _G.processes
 ---@param fn function
 ---@return number
-_G.processes.new = function(self, fn, ...)
+_G.processes.new = function(self, fn, env, ...)
+    local env = env or _G
     local process = {}
     process.__index = process
     process._PID = #_G.processes + 1
     process.__type = "process"
+    setfenv(fn, env)
     process.co = coroutine.create(fn)
     process.__args = {...}
     processes[process._PID] = process
@@ -113,6 +115,17 @@ _G.processes.step = function(self, PID, ...)
         end
         return unpack(o)
     end
+    return {"die"}
+end
+
+function _G.processes:runFile(env, path, ...)
+    print(path)
+    local fn = loadstring(io.open(path, "r"):read("*a"), "someFunc")
+    _G.processes:new(fn, env, ...)
+end
+
+_G.processes.isPID = function(self, PID)
+    return true and self[PID].__type == "process"
 end
 
 function _G.processes:die(PID)
@@ -150,29 +163,35 @@ function table.find(tbl, elem)
     end
     return false, nil
 end
-
+local output = {}
 local needInput = {}
 local waitList = {}
-
+processes:runFile(_G, "/bin/shell.lua")
 while true do
+    if #_G.processes == 0 then break end
     local eventData = {os.pullEventRaw()}
-    for k, v in pairs(processes) do
-        if type(v) == "table" and v.__type == "process" then
-            if not waitList[v._PID] or waitList[v._PID] < os.clock() then
-                if waitList[v._PID] then waitList[v._PID] = nil end
-                if needInput[v._PID] then
-                    local output = {processes:step(v._PID, unpack(eventData))}
-                else
-                    local output = {processes:step(v._PID)}
-                end
-                if output == "die" then
-                    processes:die(v._PID)
-                elseif output[1] == "ask_input" then
-                    needInput[v._PID] = true
-                elseif output[1] == "wait" then
-                    waitList[v._PID] = os.clock() + output[2]
-                else
-                    needInput[v._PID] = nil
+    if eventData[1] == "new_process" and processes:isPID(eventData[2]) then
+        local count = eventData[4]
+        _G.processes:runFile(_G, eventData[3], unpack(eventData, 5, 4+count))
+    else
+        for k, v in pairs(processes) do
+            if type(v) == "table" and v.__type == "process" then
+                if not waitList[v._PID] or waitList[v._PID] < os.clock() then
+                    if waitList[v._PID] then waitList[v._PID] = nil end
+                    if needInput[v._PID] then
+                        output = {processes:step(v._PID, unpack(eventData))}
+                    else
+                        output = {processes:step(v._PID)}
+                    end
+                    if output[1] == "die" then
+                        processes:die(v._PID)
+                    elseif output[1] == "ask_input" then
+                        needInput[v._PID] = true
+                    elseif output[1] == "wait" then
+                        waitList[v._PID] = os.clock() + output[2]
+                    else
+                        needInput[v._PID] = nil
+                    end
                 end
             end
         end
